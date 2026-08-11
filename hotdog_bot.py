@@ -120,7 +120,7 @@ Sayt: {SITE}
 
 DELIVERY = """🚚 <b>Yetkazib berish</b>
 
-• Toshkent bo'ylab yetkazib beramiz
+• Chirchiq bo'ylab yetkazib beramiz
 • Buyurtma qabul qilingach darhol tayyorlanadi
 • 🔥 30 daqiqada yetkaziladi
 • Maxsus issiq quticha bilan — issiqligicha keladi
@@ -146,7 +146,7 @@ ITEMS = {
         ("qazili_kichkina", "Kichkina", 15000),
     ],
     "salatli": [
-        ("salatli_2x", "2x-Katta", 37000),
+        ("salatli_2x", "2x-Katta", 27000),
         ("salatli_katta", "Katta", 25000),
         ("salatli_orta", "O'rtacha", 17000),
         ("salatli_kichkina", "Kichkina", 14000),
