@@ -1,3 +1,4 @@
+
 """
 STREET HOT DOG — Telegram bot
 ==============================
@@ -7,11 +8,19 @@ Komandalar / tugmalar:
   🛒 Buyurtma       — buyurtma berish (tugmalar orqali, admin'ga keladi)
   📞 Aloqa          — telefon, Telegram
   🚚 Yetkazib berish — yetkazish shartlari
+  /admin            — admin panel (faqat ADMIN_ID uchun): kartalarni boshqarish
 
 Buyurtma admin'ga (ADMIN_ID) yuboriladi.
 Manzil bosqichida mijoz yoki matn yozadi, yoki 📍 joylashuvini yuboradi.
+So'ngra to'lov turi tanlanadi: 💵 Naqd yoki 💳 Online (karta orqali).
+Online tanlansa, admin qo'shgan kartalar ro'yxati ko'rsatiladi.
 Har bir mijozning oxirgi 3 ta buyurtmasi saqlanadi — «🔁 Oxirgi buyurtmalarim»
 tugmasi orqali ulardan birini bir zumda qayta buyurtma qilish mumkin.
+
+Admin karta boshqaruvi:
+  /admin -> 💳 Kartalarni boshqarish -> ➕ Yangi karta qo'shish / 🗑 O'chirish
+  Karta qo'shilmagan bo'lsa, standart "8600 xxxx xxxx xxxx" ko'rsatiladi —
+  admin buni o'chirib, o'z real kartasini qo'shishi mumkin.
 
 Ishga tushirish:
     pip install aiogram
@@ -49,6 +58,11 @@ SITE = "https://street-hotdog-uz.netlify.app"
 
 HISTORY_FILE = Path(__file__).with_name("order_history.json")
 HISTORY_LIMIT = 3   # har bir mijoz uchun saqlanadigan oxirgi buyurtmalar soni
+
+CARDS_FILE = Path(__file__).with_name("cards.json")
+DEFAULT_CARDS = [
+    {"id": "card1", "bank": "Karta", "number": "8600 xxxx xxxx xxxx", "holder": "—"}
+]
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s | %(levelname)s | %(message)s")
@@ -205,12 +219,12 @@ def _save_history(history: dict) -> None:
         log.warning("order_history.json ga yozilmadi")
 
 
-def add_to_history(user_id: int, cart: list, phone: str, address_text: str) -> None:
+def add_to_history(user_id: int, cart: list, phone: str, address_text: str, payment_text: str) -> None:
     history = _load_history()
     user_key = str(user_id)
     user_orders = history.get(user_key, [])
     # eng yangisi ro'yxat boshida turadi
-    user_orders.insert(0, {"cart": cart, "phone": phone, "address": address_text})
+    user_orders.insert(0, {"cart": cart, "phone": phone, "address": address_text, "payment": payment_text})
     history[user_key] = user_orders[:HISTORY_LIMIT]
     _save_history(history)
 
@@ -218,6 +232,49 @@ def add_to_history(user_id: int, cart: list, phone: str, address_text: str) -> N
 def get_history(user_id: int) -> list:
     history = _load_history()
     return history.get(str(user_id), [])
+
+
+# ── kartalar (admin qo'shadi/o'chiradi, "Online to'lov" uchun) ───────
+def _load_cards() -> list:
+    if CARDS_FILE.exists():
+        try:
+            data = json.loads(CARDS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list) and data:
+                return data
+        except Exception:
+            log.warning("cards.json o'qilmadi, standart kartadan boshlanadi")
+    return list(DEFAULT_CARDS)
+
+
+def _save_cards(cards: list) -> None:
+    try:
+        CARDS_FILE.write_text(json.dumps(cards, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        log.warning("cards.json ga yozilmadi")
+
+
+def get_cards() -> list:
+    return _load_cards()
+
+
+def add_card(number: str, holder: str, bank: str = "Karta") -> None:
+    cards = _load_cards()
+    new_id = f"card{(max((int(c['id'][4:]) for c in cards if c['id'][4:].isdigit()), default=0)) + 1}"
+    cards.append({"id": new_id, "bank": bank, "number": number, "holder": holder or "—"})
+    _save_cards(cards)
+
+
+def delete_card(card_id: str) -> None:
+    cards = _load_cards()
+    cards = [c for c in cards if c["id"] != card_id]
+    _save_cards(cards)
+
+
+def find_card(card_id: str):
+    for c in get_cards():
+        if c["id"] == card_id:
+            return c
+    return None
 
 
 # ── inline klaviaturalar ──────────────────────────────
@@ -284,6 +341,23 @@ def repeat_order_confirm_kb() -> InlineKeyboardMarkup:
     ])
 
 
+def payment_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💵 Naqd pul", callback_data="pay:cash")],
+        [InlineKeyboardButton(text="💳 Online to'lov", callback_data="pay:online")],
+    ])
+
+
+def card_choice_kb() -> InlineKeyboardMarkup:
+    cards = get_cards()
+    buttons = [
+        [InlineKeyboardButton(text=f"💳 {c['bank']} — {c['number']}", callback_data=f"paycard:{c['id']}")]
+        for c in cards
+    ]
+    buttons.append([InlineKeyboardButton(text="◀️ Orqaga", callback_data="pay_back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 # ── pastdagi menyu ────────────────────────────────────
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -321,11 +395,39 @@ def cancel_only_kb() -> ReplyKeyboardMarkup:
     )
 
 
+# ── ADMIN klaviaturalari ──────────────────────────────
+def admin_panel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Kartalarni boshqarish", callback_data="admin_cards")],
+    ])
+
+
+def admin_cards_kb() -> InlineKeyboardMarkup:
+    cards = get_cards()
+    buttons = []
+    for c in cards:
+        buttons.append([
+            InlineKeyboardButton(text=f"💳 {c['bank']} {c['number']} ({c['holder']})", callback_data="noop"),
+        ])
+        buttons.append([
+            InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"admin_delcard:{c['id']}"),
+        ])
+    buttons.append([InlineKeyboardButton(text="➕ Yangi karta qo'shish", callback_data="admin_addcard")])
+    buttons.append([InlineKeyboardButton(text="◀️ Orqaga", callback_data="admin_home")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 # ── holatlar (buyurtma bosqichlari) ───────────────────
 class Order(StatesGroup):
     browsing = State()   # menyudan tugma orqali mahsulot/son tanlash
     phone = State()       # telefon
     address = State()     # manzil (matn yoki joylashuv)
+    payment = State()     # to'lov turi tanlash
+
+
+class AdminCard(StatesGroup):
+    number = State()
+    holder = State()
 
 
 # ── /start ────────────────────────────────────────────
@@ -428,9 +530,12 @@ async def cb_reorder_same(cb: CallbackQuery, state: FSMContext) -> None:
     if not cart or not phone or not address:
         await cb.answer("Ma'lumot yetarli emas, yangidan kiriting", show_alert=True)
         return
-    await state.clear()
-    u = cb.from_user
-    await _finalize_order(cb.bot, u, cart, phone, address, cb.message)
+    await state.update_data(cart=cart, phone=phone, address=address)
+    await state.set_state(Order.payment)
+    await cb.message.edit_text(
+        f"{cart_text(cart)}\n\n📱 {phone}\n📍 {address}\n\nTo'lov turini tanlang:",
+        reply_markup=payment_kb(),
+    )
     await cb.answer()
 
 
@@ -608,8 +713,39 @@ async def order_phone_text(message: Message, state: FSMContext) -> None:
     )
 
 
+async def _ask_payment(message: Message, state: FSMContext, address_text: str, location=None) -> None:
+    """Manzil qabul qilingach to'lov turini so'raydi."""
+    data = await state.get_data()
+    cart = data.get("cart", [])
+    await state.update_data(address=address_text, location_lat=location.latitude if location else None,
+                            location_lon=location.longitude if location else None)
+    await state.set_state(Order.payment)
+    await message.answer(
+        f"{cart_text(cart)}\n\n📍 {address_text}\n\nTo'lov turini tanlang:",
+        reply_markup=payment_kb(),
+    )
+
+
+@router.message(Order.address, F.location)
+async def order_address_location(message: Message, state: FSMContext) -> None:
+    loc = message.location
+    address_text = f"📍 Joriy joylashuv ({loc.latitude:.5f}, {loc.longitude:.5f})"
+    await _ask_payment(message, state, address_text, location=loc)
+
+
+@router.message(Order.address, F.text)
+async def order_address_text(message: Message, state: FSMContext) -> None:
+    if message.text == "◀️ Bekor qilish":
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=main_menu())
+        return
+    await _ask_payment(message, state, message.text)
+
+
+# ── to'lov turi tanlash ───────────────────────────────
 async def _finalize_order(bot: Bot, u, cart: list, phone: str, address_text: str,
-                          reply_target: Message, location=None) -> None:
+                          payment_text: str, reply_target: Message,
+                          location_lat=None, location_lon=None) -> None:
     """Buyurtmani admin'ga yuboradi, mijozga tasdiq beradi va tarixga saqlaydi."""
     uname = f"@{u.username}" if u.username else "—"
     order_line = cart_order_line(cart)
@@ -620,14 +756,15 @@ async def _finalize_order(bot: Bot, u, cart: list, phone: str, address_text: str
         f"🌭 Buyurtma: {order_line}\n"
         f"💰 Jami: {total}\n"
         f"📱 Telefon: {phone}\n"
-        f"📍 Manzil: {address_text}\n\n"
+        f"📍 Manzil: {address_text}\n"
+        f"💳 To'lov: {payment_text}\n\n"
         f"👤 Mijoz: {u.full_name} ({uname})\n"
         f"🆔 <code>{u.id}</code>"
     )
     try:
         await bot.send_message(ADMIN_ID, order_text)
-        if location is not None:
-            await bot.send_location(ADMIN_ID, latitude=location.latitude, longitude=location.longitude)
+        if location_lat is not None and location_lon is not None:
+            await bot.send_location(ADMIN_ID, latitude=location_lat, longitude=location_lon)
     except Exception:
         log.warning("Admin'ga yuborilmadi")
 
@@ -636,41 +773,162 @@ async def _finalize_order(bot: Bot, u, cart: list, phone: str, address_text: str
         f"🌭 {order_line}\n"
         f"💰 Jami: {total}\n"
         f"📱 {phone}\n"
-        f"📍 {address_text}\n\n"
+        f"📍 {address_text}\n"
+        f"💳 To'lov: {payment_text}\n\n"
         "Tez orada operator siz bilan bog'lanadi. "
         f"Savol bo'lsa: {PHONE}",
         reply_markup=main_menu(),
     )
 
-    add_to_history(u.id, cart, phone, address_text)
+    add_to_history(u.id, cart, phone, address_text, payment_text)
 
 
-@router.message(Order.address, F.location)
-async def order_address_location(message: Message, state: FSMContext, bot: Bot) -> None:
+@router.callback_query(Order.payment, F.data == "pay:cash")
+async def cb_pay_cash(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     cart = data.get("cart", [])
     phone = data.get("phone")
+    address = data.get("address")
+    lat = data.get("location_lat")
+    lon = data.get("location_lon")
     await state.clear()
-    loc = message.location
-    address_text = f"📍 Joriy joylashuv ({loc.latitude:.5f}, {loc.longitude:.5f})"
-    await _finalize_order(bot, message.from_user, cart, phone, address_text, message, location=loc)
+    await cb.message.edit_text(f"{cart_text(cart)}\n\n💵 To'lov: Naqd pul")
+    await _finalize_order(bot, cb.from_user, cart, phone, address, "💵 Naqd pul",
+                          cb.message, location_lat=lat, location_lon=lon)
+    await cb.answer()
 
 
-@router.message(Order.address, F.text)
-async def order_address_text(message: Message, state: FSMContext, bot: Bot) -> None:
-    if message.text == "◀️ Bekor qilish":
-        await state.clear()
-        await message.answer("Bekor qilindi.", reply_markup=main_menu())
+@router.callback_query(Order.payment, F.data == "pay:online")
+async def cb_pay_online(cb: CallbackQuery, state: FSMContext) -> None:
+    cards = get_cards()
+    if not cards:
+        await cb.answer("Hozircha online to'lov kartalari mavjud emas", show_alert=True)
         return
+    await cb.message.edit_text(
+        "💳 <b>Online to'lov</b>\n\nQaysi kartaga to'lov qilmoqchisiz?",
+        reply_markup=card_choice_kb(),
+    )
+    await cb.answer()
 
+
+@router.callback_query(Order.payment, F.data == "pay_back")
+async def cb_pay_back(cb: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    cart = data.get("cart", [])
+    address = data.get("address")
+    await cb.message.edit_text(
+        f"{cart_text(cart)}\n\n📍 {address}\n\nTo'lov turini tanlang:",
+        reply_markup=payment_kb(),
+    )
+    await cb.answer()
+
+
+@router.callback_query(Order.payment, F.data.startswith("paycard:"))
+async def cb_pay_card(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    card_id = cb.data.split(":", 1)[1]
+    card = find_card(card_id)
+    if not card:
+        await cb.answer("Karta topilmadi", show_alert=True)
+        return
     data = await state.get_data()
     cart = data.get("cart", [])
     phone = data.get("phone")
+    address = data.get("address")
+    lat = data.get("location_lat")
+    lon = data.get("location_lon")
+    total = format_price(cart_total(cart))
+    payment_text = f"💳 Online — {card['bank']} {card['number']} ({card['holder']})"
     await state.clear()
-    await _finalize_order(bot, message.from_user, cart, phone, message.text, message)
+    await cb.message.edit_text(
+        f"💳 <b>To'lov ma'lumotlari</b>\n\n"
+        f"Karta: <code>{card['number']}</code>\n"
+        f"Egasi: {card['holder']}\n"
+        f"Summa: {total}\n\n"
+        "To'lovni amalga oshirib, chekni operatorga yuboring.",
+    )
+    await _finalize_order(bot, cb.from_user, cart, phone, address, payment_text,
+                          cb.message, location_lat=lat, location_lon=lon)
+    await cb.answer()
 
 
-# ── admin buyurtmaga javob (ixtiyoriy) ────────────────
+# ── ADMIN: kartalarni boshqarish ──────────────────────
+@router.message(Command("admin"))
+async def cmd_admin(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    await message.answer("🛠 <b>Admin panel</b>", reply_markup=admin_panel_kb())
+
+
+@router.callback_query(F.data == "admin_home")
+async def cb_admin_home(cb: CallbackQuery, state: FSMContext) -> None:
+    if cb.from_user.id != ADMIN_ID:
+        await cb.answer()
+        return
+    await state.clear()
+    await cb.message.edit_text("🛠 <b>Admin panel</b>", reply_markup=admin_panel_kb())
+    await cb.answer()
+
+
+@router.callback_query(F.data == "admin_cards")
+async def cb_admin_cards(cb: CallbackQuery, state: FSMContext) -> None:
+    if cb.from_user.id != ADMIN_ID:
+        await cb.answer()
+        return
+    await cb.message.edit_text(
+        "💳 <b>Kartalarni boshqarish</b>\n\n"
+        "Mijozlar «Online to'lov» tanlaganda shu kartalar ko'rsatiladi:",
+        reply_markup=admin_cards_kb(),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("admin_delcard:"))
+async def cb_admin_delcard(cb: CallbackQuery, state: FSMContext) -> None:
+    if cb.from_user.id != ADMIN_ID:
+        await cb.answer()
+        return
+    card_id = cb.data.split(":", 1)[1]
+    delete_card(card_id)
+    await cb.message.edit_text(
+        "💳 <b>Kartalarni boshqarish</b>\n\nKarta o'chirildi.",
+        reply_markup=admin_cards_kb(),
+    )
+    await cb.answer("O'chirildi")
+
+
+@router.callback_query(F.data == "admin_addcard")
+async def cb_admin_addcard(cb: CallbackQuery, state: FSMContext) -> None:
+    if cb.from_user.id != ADMIN_ID:
+        await cb.answer()
+        return
+    await state.set_state(AdminCard.number)
+    await cb.message.edit_text("➕ <b>Yangi karta</b>\n\nKarta raqamini yuboring (masalan: 8600 1234 5678 9012):")
+    await cb.answer()
+
+
+@router.message(AdminCard.number, F.text)
+async def admin_card_number(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.update_data(new_card_number=message.text.strip())
+    await state.set_state(AdminCard.holder)
+    await message.answer("👤 Karta egasining ismini yuboring (masalan: SHOKHRUKH A.):")
+
+
+@router.message(AdminCard.holder, F.text)
+async def admin_card_holder(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    number = data.get("new_card_number", "8600 xxxx xxxx xxxx")
+    holder = message.text.strip()
+    add_card(number, holder)
+    await state.clear()
+    await message.answer("✅ Karta qo'shildi.", reply_markup=admin_panel_kb())
+
+
+# ── /id ────────────────────────────────────────────
 @router.message(Command("id"))
 async def cmd_id(message: Message) -> None:
     await message.answer(f"Sizning ID: <code>{message.from_user.id}</code>")
