@@ -41,11 +41,11 @@ TOKEN = os.getenv("BOT_TOKEN", "")
 OWNER_ID = int(os.getenv("ADMIN_ID", "0"))
 PHONE = "+998 90 096 87 70"
 TG_CONTACT = "@sh0khrukh1"
-SITE = "https://street-hotdog-uz.netlify.app"
+SITE = "https://street-hot-dog.vercel.app"
 REMIND_SEC = 120          # eslatma oralig'i (2 daqiqa)
 
 # Chirchiqdagi xizmat ko'rsatiladigan / olib ketish mumkin bo'lgan hududlar
-CHIRCHIQ_AREAS = ["Yangiobod", "Do'stlik", "Yubileyniy", "Guliston", "Nurafshon"]
+CHIRCHIQ_AREAS = ["Navoiy ko'chasi", "Oqqovoq ", "Gorpark", "2-Mikrorayon"]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
